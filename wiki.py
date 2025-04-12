@@ -72,10 +72,7 @@ def generate_search_queries(topic: str) -> List[str]:
         except:
             pass  # If there's any error reading cache, continue with normal processing
     
-    client = anthropic.Anthropic(
-        # You'll need to set your API key here or use environment variables
-        # api_key=os.environ.get("ANTHROPIC_API_KEY")
-    )
+    client = anthropic.Anthropic()
     
     # Define the tool for structured output
     tools = [
