@@ -70,9 +70,18 @@ async def generate_quiz_questions(
                                 "explanation": {
                                     "type": "string",
                                     "description": "Explanation for the correct answer"
+                                },
+                                "difficulty": {
+                                    "type": "string",
+                                    "enum": ["easy", "medium", "hard"],
+                                    "description": "The difficulty level of the question"
+                                },
+                                "success_pun": {
+                                    "type": "string",
+                                    "description": "A short, punny exclamation related to the question to display when answered correctly"
                                 }
                             },
-                            "required": ["question_number", "question", "question_type", "correct_answer", "explanation"]
+                            "required": ["question_number", "question", "question_type", "correct_answer", "explanation", "difficulty", "success_pun"]
                         }
                     }
                 },
@@ -95,19 +104,38 @@ async def generate_quiz_questions(
         prompt = f"""
         You are an expert in creating educational quiz questions.
         
-        Below is a section of text. Create {sub_n} quiz questions based ONLY on the information in this text.
+        Below is a section of text. Create {sub_n} diverse quiz questions based ONLY on the information in this text.
         
         For each question:
         - Create a mix of multiple choice (with 4 options) and true/false questions
-        - For multiple choice: provide 4 answer choices and indicate the correct one
+        - ENSURE EACH QUESTION COVERS A DIFFERENT CONCEPT OR FACT from the text
+        - STAY STRICTLY FOCUSED ON THE MAIN TOPIC of the text
+        - Identify the primary subject matter in the first paragraph and maintain focus on that subject
+        - If the text contains information about multiple topics, only create questions about the dominant topic
+        - Focus on KEY CONCEPTS that would appear on an exam about this topic
+        - For multiple choice: provide 4 distinct answer choices and indicate the correct one
+        - THE CORRECT ANSWER MUST BE AN EXACT MATCH of one of the 4 answer choices
+        - Make distractors plausible but clearly incorrect based on the text
         - For true/false: indicate whether the statement is true or false
-        - Provide a brief explanation for the correct answer
-        - Only create questions that can be definitively answered from the text
+        - Provide a concise explanation for the correct answer citing the text
+        - Questions should test understanding at various levels (recall, application, analysis)
+        - Assign a difficulty level (easy, medium, hard) to each question based on how challenging it is
+        - Create a short, punny exclamation related to the question content to display when a user answers correctly
+        - Questions must be clearly answerable from the provided text
         
         TEXT SECTION:
         {part_text}
         
-        Remember to ONLY create questions where the answer can be found directly in the text.
+        IMPORTANT:
+        - DOUBLE-CHECK that your correct_answer EXACTLY matches one of the choices provided
+        - COMPLETELY IGNORE any portions of text that don't relate to the main topic identified in the first paragraph
+        - Do NOT repeat similar questions or test the same concept multiple times
+        - Do NOT introduce concepts from outside the provided text
+        - DO NOT mix topics or shift between unrelated subjects (like from animals to computer science)
+        - VERIFY all answers are properly matched with choices before submitting
+        - If you find an inconsistency in your multiple-choice options, fix it before finalizing
+        - Make sure each success_pun is relevant and appropriate
+        
         Use the create_quiz_questions tool to format your response.
         """
         
@@ -133,6 +161,14 @@ async def generate_quiz_questions(
                         if q["question_type"] == "multiple_choice" and "choices" not in q:
                             # If no choices field, create a default one with placeholder
                             q["choices"] = ["Error: Choices not generated properly"]
+                            
+                        # Ensure difficulty is set
+                        if "difficulty" not in q:
+                            q["difficulty"] = "medium"
+                            
+                        # Ensure success pun is set
+                        if "success_pun" not in q:
+                            q["success_pun"] = "Great job!"
                     
                     return questions
             
