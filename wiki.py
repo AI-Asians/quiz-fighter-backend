@@ -1,80 +1,82 @@
-
-import requests
 import json
 import anthropic
-import concurrent.futures
-import os
-from typing import List, Dict, Any, Tuple
+import asyncio
+import aiohttp
 
-def wiki_search_with_claude(user_input: str, max_results_per_query: int = 3, include_full_content: bool = True) -> str:
+# ---------------------------------------------------------------------
+# MAIN FUNCTION
+# ---------------------------------------------------------------------
+async def wiki_search_with_claude(user_input: str, include_full_content: bool = True) -> str:
     """
-    Function that:
-    1. Takes user input string
-    2. Uses Claude Haiku to generate search queries focused on educational concepts
-    3. Collects information from Wikipedia API searches
-    4. Returns the combined information as a string, optimized for flashcard/quiz creation
+    Asynchronously:
+    1. Generate search queries with Claude (synchronously).
+    2. Collect information from up to 3 Wikipedia articles per query via aiohttp.
+    3. Return the combined information as a string.
     
     Args:
-        user_input: User input topic string (e.g., "breadth first search")
-        max_results_per_query: Maximum number of results to retrieve per query
-        include_full_content: Whether to include full content (True) or just intro (False)
+        user_input: The topic to generate search queries for and retrieve info on.
+        include_full_content: Whether to include the full article text or just intro.
         
     Returns:
-        A single string containing all Wikipedia information
+        A single string containing the retrieved Wikipedia information.
     """
-    # Step 1: Use Claude Haiku to generate concept-focused search queries
+    # 1. Generate concept-focused search queries (synchronously).
     search_queries = generate_search_queries(user_input)
-    
-    # Step 2: Search Wikipedia for each query in parallel
+
+    # 2. Asynchronously search Wikipedia for each query and collect results.
     wiki_content = []
-    
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        # Submit search tasks for each query
-        future_to_query = {
-            executor.submit(search_wikipedia_multiple, query, max_results_per_query, include_full_content): query 
+    async with aiohttp.ClientSession() as session:
+        tasks = [
+            fetch_wikipedia_content(session, query, include_full_content)
             for query in search_queries
-        }
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Process completed tasks as they finish
-        for future in concurrent.futures.as_completed(future_to_query):
-            query = future_to_query[future]
-            try:
-                results = future.result()
-                if results:
-                    wiki_content.append(f"--- Content for '{query}' ---\n{results}")
-            except Exception as e:
-                wiki_content.append(f"--- Error retrieving content for '{query}' ---\n{str(e)}")
+    # Collect results or errors
+    for query, content in zip(search_queries, results):
+        if isinstance(content, Exception):
+            wiki_content.append(f"--- Error retrieving content for '{query}' ---\n{str(content)}")
+        else:
+            wiki_content.append(f"--- Content for '{query}' ---\n{content}")
     
-    # Step 3: Combine all content into a single string
+    # 3. Combine all content into a single string
     if not wiki_content:
         return "No Wikipedia content found for the given input."
     
     return "\n\n".join(wiki_content)
 
-def generate_search_queries(topic: str) -> List[str]:
+# ---------------------------------------------------------------------
+# CLAUDE QUERY GENERATION (SYNCHRONOUS)
+# ---------------------------------------------------------------------
+def generate_search_queries(topic: str):
     """
-    Use Claude Haiku to generate education-focused search queries for Wikipedia
-    based on user input. Optimized for retrieving concept-focused content suitable
-    for flashcards and quizzes.
+    Call Anthropic (synchronously) to get a list of concept-focused
+    Wikipedia search queries for the given topic.
     
-    Args:
-        topic: User input topic string
-    
-    Returns:
-        List of search queries
+    Caching is removed to simplify and ensure fresh queries each time.
     """
-    # Simple caching mechanism - check if we've already processed this topic
-    cache_file = f"query_cache_{hash(topic)}.json"
-    if os.path.exists(cache_file):
-        try:
-            with open(cache_file, 'r') as f:
-                return json.load(f)
-        except:
-            pass  # If there's any error reading cache, continue with normal processing
-    
     client = anthropic.Anthropic()
     
-    # Define the tool for structured output
+    # Prepare instructions and tool usage, if needed
+    system_prompt = """
+    You are an expert at generating effective search queries for educational content on Wikipedia.
+    Based on the user's topic, generate 4-6 specific search queries that would yield
+    comprehensive information about the core concepts, principles, and applications of the topic.
+    
+    Your queries should focus on:
+    1. The main concept or algorithm directly
+    2. Key theoretical principles and mechanisms
+    3. Common variants or alternative approaches
+    4. Practical applications and implementations
+    
+    Prioritize technical understanding of how the concept works over historical information or
+    key contributors. The goal is to gather information suitable for creating educational
+    flashcards and quiz questions that test comprehension of the topic.
+    
+    Keep queries concise but specific, and ensure they use terminology that would match
+    Wikipedia article sections about the mechanism, process, or implementation.
+    """
+
     tools = [
         {
             "name": "generate_wiki_queries",
@@ -95,28 +97,8 @@ def generate_search_queries(topic: str) -> List[str]:
             }
         }
     ]
-    
-    # Improved prompt focused on educational concepts for flashcards/quizzes
-    system_prompt = """
-    You are an expert at generating effective search queries for educational content on Wikipedia.
-    Based on the user's topic, generate 4-6 specific search queries that would yield
-    comprehensive information about the core concepts, principles, and applications of the topic.
-    
-    Your queries should focus on:
-    1. The main concept or algorithm directly
-    2. Key theoretical principles and mechanisms
-    3. Common variants or alternative approaches
-    4. Practical applications and implementations
-    
-    Prioritize technical understanding of how the concept works over historical information or
-    key contributors. The goal is to gather information suitable for creating educational
-    flashcards and quiz questions that test comprehension of the topic.
-    
-    Keep queries concise but specific, and ensure they use terminology that would match
-    Wikipedia article sections about the mechanism, process, or implementation.
-    """
-    
-    # Call Claude Haiku with tool use for structured output
+
+    # Create system + user prompts
     response = client.messages.create(
         model="claude-3-5-haiku-latest",
         max_tokens=1024,
@@ -129,39 +111,33 @@ def generate_search_queries(topic: str) -> List[str]:
         tool_choice={"type": "tool", "name": "generate_wiki_queries"}
     )
     
-    # Extract the structured output
+    # Attempt to parse the structured output for queries
     queries = []
-    for content in response.content:
-        if content.type == "tool_use" and content.name == "generate_wiki_queries":
-            queries = content.input.get("queries", [])
-            
-            # Save to cache for future use
-            try:
-                with open(cache_file, 'w') as f:
-                    json.dump(queries, f)
-            except:
-                pass  # If we can't write to cache, just continue
-                
-            return queries
+    if isinstance(response.content, list):
+        # In some Anthropics Python clients, response.content might be list of messages
+        for content in response.content:
+            if getattr(content, "type", "") == "tool_use" and content.name == "generate_wiki_queries":
+                queries = content.input.get("queries", [])
+    else:
+        # Fallback to just returning the topic as a single query
+        queries = [topic]
     
-    # Fallback in case tool use failed
-    fallback_queries = [topic]
-    return fallback_queries
+    # If Anthropic didn't produce anything, fallback
+    if not queries:
+        queries = [topic]
+    
+    return queries
 
-def search_wikipedia_multiple(query: str, max_results: int = 3, full_content: bool = True) -> str:
+# ---------------------------------------------------------------------
+# WIKIPEDIA RETRIEVAL (ASYNC + AIOHTTP)
+# ---------------------------------------------------------------------
+async def fetch_wikipedia_content(session: aiohttp.ClientSession, query: str, full_content: bool) -> str:
     """
-    Search Wikipedia for a specific query and return content from multiple results.
-    Focuses on retrieving educational content suitable for flashcards and quizzes.
-    
-    Args:
-        query: Search query for Wikipedia
-        max_results: Maximum number of results to return (default: 3)
-        full_content: Whether to fetch full article content (True) or just intro (False)
-        
-    Returns:
-        Combined content from multiple Wikipedia articles for the given query
+    1. Search Wikipedia for up to 3 articles matching 'query'.
+    2. For each article, fetch its content (intro or full).
+    3. Return the combined content as a string.
     """
-    # First, search for articles related to the query
+    # 1. Search for up to 3 matching articles
     search_url = "https://en.wikipedia.org/w/api.php"
     search_params = {
         "action": "query",
@@ -169,127 +145,80 @@ def search_wikipedia_multiple(query: str, max_results: int = 3, full_content: bo
         "list": "search",
         "srsearch": query,
         "utf8": 1,
-        "srlimit": max_results  # Get multiple results
+        "srlimit": 3  # Hard-limit to 3 articles
     }
     
     try:
-        search_response = requests.get(search_url, params=search_params, timeout=10)
-        search_data = search_response.json()
-        
-        # If no search results found
-        if not search_data.get("query", {}).get("search", []):
-            return f"No Wikipedia articles found for query: {query}"
-        
-        # Process multiple results in parallel
-        search_results = search_data["query"]["search"]
-        articles = []
-        
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Submit tasks for each article
-            future_to_article = {
-                executor.submit(
-                    fetch_article_content, 
-                    result["title"], 
-                    full_content
-                ): result["title"] 
-                for result in search_results[:max_results]
-            }
-            
-            # Process completed tasks
-            for future in concurrent.futures.as_completed(future_to_article):
-                title = future_to_article[future]
-                try:
-                    content = future.result()
-                    if content:
-                        articles.append(f"### {title} ###\n{content}")
-                except Exception as e:
-                    articles.append(f"### {title} ###\nError retrieving content: {str(e)}")
-        
-        # Combine all article contents
-        return "\n\n".join(articles)
-        
+        async with session.get(search_url, params=search_params, timeout=10) as resp:
+            search_data = await resp.json()
     except Exception as e:
-        return f"Error searching Wikipedia: {str(e)}"
-
-def fetch_article_content(title: str, full_content: bool = True) -> str:
-    """
-    Fetch content for a specific Wikipedia article, focusing on sections
-    most relevant to educational understanding.
+        return f"Error searching Wikipedia for '{query}': {str(e)}"
     
-    Args:
-        title: Title of the Wikipedia article
-        full_content: Whether to fetch full article content (True) or just intro (False)
-        
-    Returns:
-        Content of the Wikipedia article
+    search_results = search_data.get("query", {}).get("search", [])
+    if not search_results:
+        return f"No Wikipedia articles found for query: {query}"
+
+    # 2. Fetch each article in parallel
+    tasks = []
+    for result in search_results:
+        title = result["title"]
+        tasks.append(fetch_article_content(session, title, full_content))
+    
+    article_texts = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # 3. Combine articles
+    combined_content = []
+    for result, content in zip(search_results, article_texts):
+        title = result["title"]
+        if isinstance(content, Exception):
+            combined_content.append(f"### {title} ###\nError: {str(content)}")
+        else:
+            combined_content.append(f"### {title} ###\n{content}")
+    
+    return "\n\n".join(combined_content)
+
+
+async def fetch_article_content(session: aiohttp.ClientSession, title: str, full_content: bool = True) -> str:
+    """
+    Fetch either the intro or the full text of a Wikipedia article.
     """
     api_url = "https://en.wikipedia.org/w/api.php"
-    
-    # Set parameters based on whether we want full content or just intro
     params = {
         "action": "query",
         "format": "json",
         "titles": title,
         "prop": "extracts",
-        "explaintext": 1  # Get plain text, not HTML
+        "explaintext": 1,
     }
     
     if not full_content:
-        params["exintro"] = 1  # Only get the introduction section
+        # Only get the intro
+        params["exintro"] = 1
     
     try:
-        response = requests.get(api_url, params=params, timeout=10)
-        data = response.json()
-        
-        # Extract the page content
-        pages = data.get("query", {}).get("pages", {})
-        if not pages:
-            return f"Could not retrieve content for: {title}"
-        
-        # Get the content of the article
-        page_id = next(iter(pages))
-        content = pages[page_id].get("extract", f"No content found for: {title}")
-        
-        # For full content, filter out sections that aren't relevant for educational purposes
-        if full_content:
-            # This is a very basic approach - a more sophisticated version would
-            # use the Wikipedia API to get the section structure and selectively include sections
-            
-            # Limit content length to avoid overwhelming results
-            if len(content) > 8000:  # Increased from 5000 to include more educational content
-                content = content[:8000] + "... [content truncated]"
-            
-        return content
-    
+        async with session.get(api_url, params=params, timeout=10) as resp:
+            data = await resp.json()
     except Exception as e:
-        return f"Error fetching article content: {str(e)}"
+        return f"Error fetching content for '{title}': {str(e)}"
+    
+    pages = data.get("query", {}).get("pages", {})
+    if not pages:
+        return f"No content found for '{title}'"
+    
+    page_id = next(iter(pages))
+    content = pages[page_id].get("extract", f"No content found for '{title}'")
+    
+    # Truncate lengthy articles
+    if full_content and len(content) > 8000:
+        content = content[:8000] + "... [content truncated]"
+    
+    return content
 
-def fetch_sections(title: str) -> List[Dict]:
-    """
-    Fetch the section structure of a Wikipedia article.
-    This can be used to more intelligently filter content for educational purposes.
-    
-    Args:
-        title: Title of the Wikipedia article
-        
-    Returns:
-        List of sections with their titles and indices
-    """
-    api_url = "https://en.wikipedia.org/w/api.php"
-    params = {
-        "action": "parse",
-        "format": "json",
-        "page": title,
-        "prop": "sections"
-    }
-    
-    try:
-        response = requests.get(api_url, params=params, timeout=10)
-        data = response.json()
-        
-        if "parse" in data and "sections" in data["parse"]:
-            return data["parse"]["sections"]
-        return []
-    
-    except Exception:
-        return []
+# ---------------------------------------------------------------------
+# Example usage
+# ---------------------------------------------------------------------
+if __name__ == "__main__":
+    # You can run this script directly to test
+    topic = "breadth first search"
+    final_content = asyncio.run(wiki_search_with_claude(topic, include_full_content=True))
+    print(final_content)

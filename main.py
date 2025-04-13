@@ -1,14 +1,18 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from wiki import wiki_search_with_claude
 from generate_questions import generate_quiz_questions
 from loadpdf import pdf_search
+from game_utils import *
 import asyncio
 import os
 import shutil
 from typing import Optional
 
 app = FastAPI()
+# Dependency to get Supabase client
+def get_supabase():
+    return initialize_supabase()
 
 # Configure CORS
 app.add_middleware(
@@ -23,10 +27,11 @@ app.add_middleware(
 async def hello():
     return {"message": "Hello from Quiz Fighter Backend!"}
 
-@app.post("/generate-quiz")
+@app.get("/generate-quiz")
 async def generate_quiz(
-    user_query: Optional[str] = Form(None),
-    pdf_file: Optional[UploadFile] = File(None)
+    user_query: Optional[str] = Query(None),
+    pdf_file: Optional[UploadFile] = File(None),
+    device: str = Query(..., description="Device type (web or mobile)")
 ):
     """
     Generate quiz questions based on a PDF file or a user query.
@@ -34,10 +39,15 @@ async def generate_quiz(
     Args:
         user_query: The search query to find relevant Wikipedia content
         pdf_file: Optional PDF file to generate questions from
+        device: Device type ('web' or 'mobile')
         
     Returns:
-        A JSON object containing quiz questions
+        A JSON object containing quiz questions and game code
     """
+    # Validate device parameter
+    if device not in ["web", "mobile"]:
+        return {"error": "Device parameter must be either 'web' or 'mobile'"}
+    
     content = ""
     temp_pdf_path = None
     
@@ -68,15 +78,49 @@ async def generate_quiz(
     
     # If no content from PDF, use Wikipedia if query is provided
     if not content and user_query:
-        content = wiki_search_with_claude(user_query)
+        content = await wiki_search_with_claude(user_query)
     elif not content and not user_query:
         return {"error": "Please provide either a PDF file or a search query"}
     
-    # Generate quiz questions from the content
-    quiz_data = await generate_quiz_questions(content)
+    # Run tasks concurrently:
+    # 1. Generate quiz questions
+    # 2. Generate theme summary
     
-    return quiz_data
+    quiz_task = asyncio.create_task(generate_quiz_questions(content))
+    theme_task = asyncio.create_task(generate_theme_summary(content, is_pdf=bool(pdf_file)))
+    
+    # Wait for both tasks to complete
+    quiz_data = await quiz_task
+    theme_summary = await theme_task
+    
+    # Get Supabase client
+    supabase_client = initialize_supabase()
+    
+    matched_questions = await match_questions_with_games(
+        quiz_data["questions"], 
+        device, 
+        supabase_client
+    )
+    
+    # Update game configs based on theme
+    updated_questions = await update_game_configs(matched_questions, theme_summary)
+    
+    # Check if we have any matched questions
+    if not updated_questions:
+        return {
+            "error": f"No matching games found for device type '{device}' and the generated questions."
+        }
+    
+    # Prepare response - now using the number of matched questions
+    response = {
+        "total_questions": len(updated_questions),
+        "questions": updated_questions,
+        "theme_summary": theme_summary
+    }
+    
+    response["questions"] = response["questions"][:3]
+    return response
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000)
