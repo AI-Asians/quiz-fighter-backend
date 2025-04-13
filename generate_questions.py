@@ -24,45 +24,7 @@ async def generate_quiz_questions(
     client = AsyncAnthropic(api_key=api_key)
     model = "claude-3-haiku-20240307"
     
-    tools = [
-        {
-            "name": "create_quiz_questions",
-            "description": "Generate quiz questions based on the given text",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "questions": {
-                        "type": "array",
-                        "description": "Array of quiz questions",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "question_number": {"type": "integer"},
-                                "question": {"type": "string"},
-                                "question_type": {
-                                    "type": "string",
-                                    "enum": ["multiple_choice", "true_false"]
-                                },
-                                "choices": {
-                                    "type": "array",
-                                    "items": {"type": "string"}
-                                },
-                                "correct_answer": {"type": "string"},
-                                "explanation": {"type": "string"}
-                            },
-                            "required": [
-                                "question_number", "question", "question_type",
-                                "correct_answer", "explanation"
-                            ]
-                        }
-                    }
-                },
-                "required": ["questions"]
-            }
-        }
-    ]
-    
-    # 1) Reduce the context length by ~1/3 just as you did originally
+    # 1) Reduce the context length by ~1/3
     reduced_context_length = int(len(context) * 2/3)
     reduced_context = context[:reduced_context_length]
     
@@ -72,34 +34,21 @@ async def generate_quiz_questions(
     
     for i in range(n):
         start = i * part_length
-        # last chunk goes to the end of reduced_context
         end = start + part_length if i < n - 1 else len(reduced_context)
         parts.append(reduced_context[start:end])
     
-    # --------------------------------------------------------------
-    # *** KEY CHANGE TO LIMIT TOTAL QUESTIONS TO <= 10 ***
-    # If n * sub_n is more than 10, randomly sample fewer parts
-    # so that we cannot exceed 10 total. For example, if sub_n=3
-    # we can only handle at most floor(10/3) = 3 parts => 9 questions.
-    # --------------------------------------------------------------
+    # 3) Limit total questions to <= 10
     max_total = 10
     if n * sub_n > max_total:
-        # Figure out how many parts we can keep so sub_n * parts_needed <= 10
-        parts_needed = max_total // sub_n  # integer division
-        
-        # If sub_n is so large that even 1 part can exceed 10, clamp sub_n
+        parts_needed = max_total // sub_n
         if parts_needed < 1:
             parts_needed = 1
-            sub_n = max_total  # now each part can generate up to 10
-        
-        # Randomly pick 'parts_needed' parts out of n
+            sub_n = max_total
         if parts_needed < n:
             selected_indices = random.sample(range(n), parts_needed)
-            # Sort them so final ordering is stable
             selected_indices.sort()
             parts = [parts[i] for i in selected_indices]
             n = parts_needed
-    # --------------------------------------------------------------
     
     async def generate_questions_for_part(part_index: int, part_text: str) -> List[Dict[str, Any]]:
         prompt = f"""
@@ -114,59 +63,76 @@ For each question:
 - For true/false, indicate if statement is true or false
 - Provide an explanation citing the text
 
+IMPORTANT JSON REQUIREMENTS:
+- Output valid JSON, with **no additional keys** beyond the sample structure.
+- Double quotes inside string values must be escaped (use `\\\"`).
+- Do not include any markdown formatting or code blocks. Just raw JSON.
+
 TEXT SECTION:
 {part_text}
 
-Use the create_quiz_questions tool to format your response.
+Output your response **exactly** in the following JSON format:
+{{
+    "questions": [
+        {{
+            "question_number": 1,
+            "question": "The question text",
+            "question_type": "multiple_choice",
+            "choices": ["Option A", "Option B", "Option C", "Option D"],
+            "correct_answer": "The correct answer",
+            "explanation": "The explanation citing the text"
+        }},
+        {{
+            "question_number": 2,
+            "question": "The question text",
+            "question_type": "true_false",
+            "correct_answer": "true",
+            "explanation": "The explanation citing the text"
+        }}
+    ]
+}}
 """
         try:
             response = await client.messages.create(
                 model=model,
                 max_tokens=2000,
-                tools=tools,
-                messages=[{"role": "user", "content": prompt}]
+                messages=[{"role": "user", "content": prompt}],
+                system="You must respond with valid JSON matching the specified format exactly."
             )
+
             
-            # Extract the tool-use block from the response
-            for content in response.content:
-                if content.type == "tool_use" and content.name == "create_quiz_questions":
-                    questions = content.input.get("questions", [])
-                    
-                    # Re-index questions so they remain unique across parts
-                    start_num = part_index * sub_n + 1
-                    for i, q in enumerate(questions):
-                        q["question_number"] = start_num + i
-                        if q["question_type"] == "multiple_choice" and "choices" not in q:
-                            q["choices"] = ["Error: Choices not generated properly"]
-                    
-                    return questions
-            
-            return []
+            # Parse the JSON response
+            try:
+                data = json.loads(response.content[0].text)
+                questions = data.get("questions", [])
+                
+                # Re-index questions
+                start_num = part_index * sub_n + 1
+                for i, q in enumerate(questions):
+                    q["question_number"] = start_num + i
+                
+                return questions
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse JSON response for part {part_index}: {str(e)}")
+                return []
         
         except Exception as e:
             print(f"Error generating questions for part {part_index}: {str(e)}")
             return []
     
-    # 3) Create tasks for each part
-    tasks = []
-    for i, part in enumerate(parts):
-        tasks.append(generate_questions_for_part(i, part))
-    
-    # 4) Run tasks concurrently
+    # Create and run tasks concurrently
+    tasks = [generate_questions_for_part(i, part) for i, part in enumerate(parts)]
     results = await asyncio.gather(*tasks)
     
-    # 5) Flatten into one list
+    # Flatten results and return
     all_questions = []
     for qs in results:
         all_questions.extend(qs)
     
-    # 6) Final result
-    quiz_data = {
+    return {
         "total_questions": len(all_questions),
         "questions": all_questions
     }
-    
-    return quiz_data
 
 # Optional main() for quick test
 if __name__ == "__main__":
