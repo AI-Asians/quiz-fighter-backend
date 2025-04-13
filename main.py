@@ -117,8 +117,7 @@ async def generate_quiz(
         "questions": updated_questions,
         "theme_summary": theme_summary
     }
-    
-    response["questions"] = response["questions"][:3]
+
     return response
 
 if __name__ == "__main__":
