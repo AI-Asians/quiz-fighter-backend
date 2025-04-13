@@ -61,6 +61,7 @@ For each question:
 - The question should be very short and concise
 - For multiple choice, the answer choices should only be 1-2 words
 - Each question a different concept/fact from the text
+- Add a difficulty rating to each question that has to be one of easy, medium, or hard
 - For multiple choice, show 4 distinct answer choices and the correct one
 - For true/false, indicate if statement is true or false
 - Do NOT include any markdown or latex formatting in question or answer choices
@@ -83,14 +84,16 @@ Output your response **exactly** in the following JSON format:
             "question_type": "multiple_choice",
             "choices": ["Option A", "Option B", "Option C", "Option D"],
             "correct_answer": "The correct answer",
-            "explanation": "The explanation citing the text"
+            "explanation": "The explanation citing the text",
+            "difficulty": "easy"
         }},
         {{
             "question_number": 2,
             "question": "The question text",
             "question_type": "true_false",
             "correct_answer": "true",
-            "explanation": "The explanation citing the text"
+            "explanation": "The explanation citing the text",
+            "difficulty": "medium"
         }}
     ]
 }}
