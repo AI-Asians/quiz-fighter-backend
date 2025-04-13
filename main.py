@@ -27,7 +27,7 @@ app.add_middleware(
 async def hello():
     return {"message": "Hello from Quiz Fighter Backend!"}
 
-@app.get("/generate-quiz")
+@app.route("/generate-quiz", methods=["GET", "POST"])
 async def generate_quiz(
     user_query: Optional[str] = Query(None),
     pdf_file: Optional[UploadFile] = File(None),
