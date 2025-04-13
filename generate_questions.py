@@ -78,7 +78,7 @@ async def generate_quiz_questions(
                                 },
                                 "success_pun": {
                                     "type": "string",
-                                    "description": "A short, punny exclamation related to the question to display when answered correctly"
+                                    "description": "A short, punny exclamation related to the question to display when answered correctly. MAXIMUM 3 WORDS LONG"
                                 }
                             },
                             "required": ["question_number", "question", "question_type", "correct_answer", "explanation", "difficulty", "success_pun"]
