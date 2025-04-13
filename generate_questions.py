@@ -84,7 +84,7 @@ Output your response **exactly** in the following JSON format:
             "question_type": "multiple_choice",
             "choices": ["Option A", "Option B", "Option C", "Option D"],
             "correct_answer": "The correct answer",
-            "explanation": "The explanation citing the text",
+            "explanation": "short explanation for answer",
             "difficulty": "easy"
         }},
         {{
@@ -92,7 +92,7 @@ Output your response **exactly** in the following JSON format:
             "question": "The question text",
             "question_type": "true_false",
             "correct_answer": "true",
-            "explanation": "The explanation citing the text",
+            "explanation": "short explanation for answer",
             "difficulty": "medium"
         }}
     ]
