@@ -58,10 +58,13 @@ Below is a section of text. Create {sub_n} diverse quiz questions based ONLY on 
 
 For each question:
 - Some multiple choice (4 options) and some true/false
+- The question should be very short and concise
+- For multiple choice, the answer choices should only be 1-2 words
 - Each question a different concept/fact from the text
 - For multiple choice, show 4 distinct answer choices and the correct one
 - For true/false, indicate if statement is true or false
-- Provide an explanation citing the text
+- Do NOT include any markdown or latex formatting in question or answer choices
+- Make the questions funny and trivia-like where possible
 
 IMPORTANT JSON REQUIREMENTS:
 - Output valid JSON, with **no additional keys** beyond the sample structure.
@@ -95,7 +98,7 @@ Output your response **exactly** in the following JSON format:
         try:
             response = await client.messages.create(
                 model=model,
-                max_tokens=2000,
+                max_tokens=1000,
                 messages=[{"role": "user", "content": prompt}],
                 system="You must respond with valid JSON matching the specified format exactly."
             )
